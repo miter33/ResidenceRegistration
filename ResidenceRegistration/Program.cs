@@ -4,79 +4,111 @@ using System.Text;
 
 namespace ResidenceRegistration
 {
-    public static class Program
+    internal class UserData
+    {
+        public string Email { get; set; }
+        public int VerificationNumber { get; set; }
+    }
+
+    internal static class Program
     {
         private static readonly HttpClient httpClient = new HttpClient();
+        private const string LAST_DATE = "2023-01-09";
+        private static string[] KEY_WORDS =
+        {
+            "Identyfikator wizyty",
+            "Wizyta została zarezerwowana na dzień",
+            "Potwierdzenie rezerwacji",
+            "Podsumowanie rezerwacji"
+        };
 
         static async Task Main()
         {
-            var dateReceiverUrl = "https://rezerwacje.bialystok.uw.gov.pl/?terminy=1&branch=183&service=201";
+            //var dateReceiverUrl = "https://rezerwacje.bialystok.uw.gov.pl/?terminy=1&branch=183&service=201";
+
+            var users = new List<UserData>
+            {
+                new UserData { Email = "alexg9000000@gmail.com", VerificationNumber = 6498 },
+                new UserData { Email = "alexg9000000@gmail.com", VerificationNumber = 6498 },
+                new UserData { Email = "aliaksei.huivan@gmail.com", VerificationNumber = 6498 },
+                new UserData { Email = "aliaksei.huivan@gmail.com", VerificationNumber = 6498 },
+                //new UserData { Email = "miter30@mail.ru", VerificationNumber = 6498 },
+            };
 
             while (true)
             {
-                var dateHttpResult = await httpClient.GetAsync(dateReceiverUrl);
-                var dateResponse = await dateHttpResult.Content.ReadAsStringAsync();
+                var tasks = users.Select(user => GenerateFormData(user));
 
-                var dateStr = dateResponse.Substring(1, dateResponse.Length - 2);
-
-                if (string.IsNullOrEmpty(dateStr)) continue;
-
-                var dateArray = GetSplittedStringContent(dateStr);
-                //var lastDate = "2023-01-09"; // dateArray[dateArray.Length - 1]
-                var lastDate = dateArray[dateArray.Length - 1];
-
-                if (!DateOnly.TryParse(lastDate, out DateOnly date)) continue;
-
-                DisplayInfo(dateStr, DayParam.Dates);
-
-                //var isDateValid = date >= DateTime.Now.AddDays(21);
-                //if (!isDateValid) continue;
-
-                var timeReceiverUrl = $"https://rezerwacje.bialystok.uw.gov.pl/?godziny=1&branch=183&service=201&data={lastDate}";
-
-                var timeHttpResult = await httpClient.GetAsync(timeReceiverUrl);
-                var timeResponse = await timeHttpResult.Content.ReadAsStringAsync();
-
-                var timeStr = timeResponse.Substring(1, timeResponse.Length - 2);
-
-                if (string.IsNullOrEmpty(timeStr)) continue;
-
-                var timeArray = GetSplittedStringContent(timeStr);
-
-                Random random = new();
-
-                var randomTime = timeArray[random.Next(timeArray.Length)];
-
-                if (!TimeOnly.TryParse(randomTime, out TimeOnly time)) continue;
-
-                DisplayInfo(timeStr, DayParam.Times);
-
-                await SubmitForm(randomTime, lastDate);
+                await Task.WhenAll(tasks);
             }
         }
 
-        private async static Task SubmitForm(string time, string date)
+        private async static Task GenerateFormData(UserData user)
         {
-            time = WebUtility.UrlEncode(time);
+            var timeUrlReceiver = $"https://rezerwacje.bialystok.uw.gov.pl/?godziny=1&branch=183&service=201&data={LAST_DATE}";
 
-            var body = $"sform=123&kolejka=201&data_od={date}&godzina={time}&weryfikacja=6498&email=alexg9000000%40gmail.com&zgoda=1&captha=acasjv&capthaHash=-1537224963";
+            var timeHttpResult = await httpClient.GetAsync(timeUrlReceiver);
+            var timeResponse = await timeHttpResult.Content.ReadAsStringAsync();
+
+            var timeStr = timeResponse.Substring(1, timeResponse.Length - 2);
+
+            if (string.IsNullOrEmpty(timeStr)) return;
+
+            var timeArray = GetSplittedStringContent(timeStr);
+
+            Random random = new();
+
+            var randomTime = timeArray[random.Next(timeArray.Length)];
+
+            if (!TimeOnly.TryParse(randomTime, out TimeOnly time)) return;
+
+            DisplayInfo(timeStr, DayParam.Times);
+
+            await SubmitForm(randomTime, LAST_DATE, user.Email, user.VerificationNumber);
+        }
+
+        private async static Task SubmitForm(string time, string date, string email, int verification)
+        {
+            var encryptedTime = WebUtility.UrlEncode(time);
+            var encryptedEmail = WebUtility.UrlEncode(email);
+
+            var body = $"sform=123&kolejka=201&data_od={date}&godzina={encryptedTime}&weryfikacja={verification}&email={encryptedEmail}&zgoda=1&captha=acasjv&capthaHash=-1537224963";
             var contentType = "application/x-www-form-urlencoded";
 
             var httpContent = new StringContent(body, Encoding.UTF8, contentType);
             httpContent.Headers.ContentType = new MediaTypeHeaderValue(contentType);
 
-            var response = await httpClient.PostAsync("https://rezerwacje.bialystok.uw.gov.pl/?branch=183", httpContent);
+            var httpClientResponse = await httpClient.PostAsync("https://rezerwacje.bialystok.uw.gov.pl/?branch=183", httpContent);
 
-            var tiResponse = await response.Content.ReadAsStringAsync();
+            var result = await httpClientResponse.Content.ReadAsStringAsync();
 
-            if (response.IsSuccessStatusCode)
+            if (httpClientResponse.IsSuccessStatusCode && (KEY_WORDS.Any(key => result.Contains(key, StringComparison.OrdinalIgnoreCase))))
             {
-                Console.WriteLine($"POSTED DATA: " + body + tiResponse);
-            } 
+                Console.BackgroundColor = ConsoleColor.DarkGreen;
+                Console.WriteLine($"POSTED DATA (date: {date}, time: {time}, email: {email}, verification: {verification}):\n{body}");
+
+                Console.ResetColor();
+
+                await WriteToFile(email, date, time, result, "SUCCESS");
+            }
             else
             {
-                Console.WriteLine("SUBMIT FORM IS FAILED");
+                Console.BackgroundColor = ConsoleColor.Red;
+                Console.WriteLine($"SUBMIT FORM IS FAILED (date: {date}, time: {time}, email: {email}, verification: {verification})");
+
+                Console.ResetColor();
+
+                await WriteToFile(email, date, time, result, "FAILED");
             }
+        }
+
+        private static async Task WriteToFile(string email, string applyingDate, string applyingTime, string result, string status)
+        {
+            var ticks = DateTime.Now.Ticks;
+            var time = applyingTime.Replace(':', '-');
+            var fileName = $"{status}_{ticks}_{email}_{applyingDate}_{time}.html";
+
+            await File.WriteAllTextAsync(fileName, result);
         }
 
         private static void DisplayInfo(string info, DayParam dayParam)
@@ -107,26 +139,3 @@ namespace ResidenceRegistration
         Times
     }
 }
-
-
-
-//httpClient.DefaultRequestHeaders.Add("Accept", "application/json, text/javascript;q=0.9,image/avif,image/webp,*/*;q=0.8");
-//httpClient.DefaultRequestHeaders.Add("Accept-Encoding", "gzip, deflate, br");
-//httpClient.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.5");
-//httpClient.DefaultRequestHeaders.Add("Connection", "keep-alive");
-//httpClient.DefaultRequestHeaders.Add("Sec-Fetch-Dest", "document");
-//httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:107.0) Gecko/20100101 Firefox/107.0");
-//httpClient.DefaultRequestHeaders.Add("Content-Type", "application/json");
-
-//var json = JsonConvert.SerializeObject(new
-//{
-//    sform = "123",
-//    kolejka = "185",
-//    data_od = date,
-//    godzina = time,
-//    weryfikacja = "9987",
-//    email = "miter30@mail.ru",
-//    zgoda = "1",
-//    captha = "kfbvmf", // mpyxbl
-//    capthaHash = "-1142273983" // -1051315615
-//});
