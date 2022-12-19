@@ -13,13 +13,16 @@ namespace ResidenceRegistration
     internal static class Program
     {
         private static readonly HttpClient httpClient = new HttpClient();
-        private const string LAST_DATE = "2023-01-09";
+        private const string LAST_DATE = "2023-01-10";
         private static string[] KEY_WORDS =
         {
             "Identyfikator wizyty",
             "Wizyta została zarezerwowana na dzień",
             "Potwierdzenie rezerwacji",
-            "Podsumowanie rezerwacji"
+            "Podsumowanie rezerwacji",
+            "On the day of the visit, the ticket must be picked up in a ticket vending machine 15 minutes before the booked visit by selecting the option",
+            "Usługa",
+            "Lokalizacja"
         };
 
         static async Task Main()
@@ -106,7 +109,13 @@ namespace ResidenceRegistration
         {
             var ticks = DateTime.Now.Ticks;
             var time = applyingTime.Replace(':', '-');
-            var fileName = $"{status}_{ticks}_{email}_{applyingDate}_{time}.html";
+
+            if(!Directory.Exists("REGISTRATIONS"))
+            {
+                Directory.CreateDirectory("REGISTRATIONS");
+            }
+
+            var fileName = $"REGISTRATIONS/{status}_{ticks}_{email}_{applyingDate}_{time}.html";
 
             await File.WriteAllTextAsync(fileName, result);
         }
